@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SQLite Chat App</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <section id="authScreen" class="panel auth-panel">
+        <div class="auth-box">
+          <h1>Welcome to the Chat Room</h1>
+          <form id="registerForm">
+            <label for="username">Username</label>
+            <input id="username" name="username" type="text" placeholder="Enter your name" required />
+
+            <label for="gender">Gender</label>
+            <select id="gender" name="gender" required>
+              <option value="">Select gender</option>
+              <option value="male">Male</option>
+              <option value="female">Female</option>
+            </select>
+
+            <button type="submit">Join Public Chat</button>
+          </form>
+          <p id="authMessage" class="message error"></p>
+        </div>
+      </section>
+
+      <section id="chatScreen" class="chat-layout hidden">
+        <aside class="sidebar">
+          <div class="sidebar-header">
+            <h2>Online Users</h2>
+          </div>
+          <button id="publicRoomBtn" class="room-button active">Public Room</button>
+          <ul id="onlineUsersList" class="user-list"></ul>
+        </aside>
+
+        <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
+
+        <main class="chat-main">
+          <header class="chat-header">
+            <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-label="Toggle online users">☰</button>
+            <div>
+              <span class="small-label">Current Room</span>
+              <h3 id="roomTitle">Public Room</h3>
+            </div>
+          </header>
+
+          <div id="messages" class="messages"></div>
+
+          <form id="chatForm" class="chat-form">
+            <input id="messageInput" type="text" placeholder="Type your message..." autocomplete="off" required />
+            <button type="submit" aria-label="Send message" title="Send message">➤</button>
+          </form>
+        </main>
+      </section>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>
