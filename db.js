@@ -1,6 +1,5 @@
-const sqlite3 = require('sqlite3').verbose();
-const path = require('path');
 const fs = require('fs');
+const path = require('path');
 
 // Ensure db directory exists
 const dbDir = path.join(__dirname, 'db');
@@ -8,106 +7,68 @@ if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
 
-const dbPath = path.join(dbDir, 'chatapp.db');
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) {
-    console.error('Failed to open SQLite database:', err.message);
+const dbFilePath = path.join(dbDir, 'messages.json');
+
+// In-memory messages cache backed by JSON file persistence
+let messagesCache = [];
+
+try {
+  if (fs.existsSync(dbFilePath)) {
+    const rawData = fs.readFileSync(dbFilePath, 'utf8');
+    messagesCache = JSON.parse(rawData || '[]');
   } else {
-    console.log('Connected to SQLite database at:', dbPath);
+    fs.writeFileSync(dbFilePath, '[]', 'utf8');
   }
-});
+  console.log(`[Storage] Initialized persistent JSON storage (${messagesCache.length} public messages loaded).`);
+} catch (err) {
+  console.error('[Storage] Error loading messages from disk, initializing clean cache:', err);
+  messagesCache = [];
+}
 
-// Initialize Tables
-db.serialize(() => {
-  // Public Messages Table
-  db.run(`
-    CREATE TABLE IF NOT EXISTS public_messages (
-      id TEXT PRIMARY KEY,
-      sender_id TEXT,
-      sender_name TEXT,
-      sender_gender TEXT,
-      text TEXT NOT NULL,
-      timestamp INTEGER NOT NULL,
-      is_system INTEGER DEFAULT 0
-    )
-  `);
-
-  // Index on timestamp for rapid order & limit queries
-  db.run(`
-    CREATE INDEX IF NOT EXISTS idx_public_messages_timestamp 
-    ON public_messages (timestamp DESC)
-  `);
-});
-
-/**
- * Insert a public chat message
- */
-function savePublicMessage(msg) {
-  return new Promise((resolve, reject) => {
-    const stmt = db.prepare(`
-      INSERT INTO public_messages (id, sender_id, sender_name, sender_gender, text, timestamp, is_system)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    stmt.run(
-      msg.id,
-      msg.senderId || null,
-      msg.senderName || 'System',
-      msg.senderGender || null,
-      msg.text,
-      msg.timestamp || Date.now(),
-      msg.isSystem ? 1 : 0,
-      function (err) {
-        if (err) {
-          console.error('Error saving public message:', err);
-          return reject(err);
-        }
-        resolve(this.lastID);
-      }
-    );
-    stmt.finalize();
-  });
+let writeTimeout = null;
+function persistToDisk() {
+  clearTimeout(writeTimeout);
+  writeTimeout = setTimeout(async () => {
+    try {
+      // Keep up to 2000 latest public messages on disk
+      const dataToSave = messagesCache.slice(-2000);
+      await fs.promises.writeFile(dbFilePath, JSON.stringify(dataToSave, null, 2), 'utf8');
+    } catch (err) {
+      console.error('[Storage] Error persisting messages to disk:', err);
+    }
+  }, 100);
 }
 
 /**
- * Retrieve the last N public messages in chronological order
+ * Insert a public chat message (Promise API)
  */
-function getLastPublicMessages(limit = 10) {
-  return new Promise((resolve, reject) => {
-    db.all(
-      `
-      SELECT 
-        id, 
-        sender_id as senderId, 
-        sender_name as senderName, 
-        sender_gender as senderGender, 
-        text, 
-        timestamp, 
-        is_system as isSystem
-      FROM public_messages 
-      ORDER BY timestamp DESC 
-      LIMIT ?
-      `,
-      [limit],
-      (err, rows) => {
-        if (err) {
-          console.error('Error fetching public messages:', err);
-          return reject(err);
-        }
-        // Convert isSystem from 0/1 to boolean and reverse to chronological order
-        const messages = (rows || []).map(r => ({
-          ...r,
-          isSystem: Boolean(r.isSystem),
-          isPrivate: false
-        })).reverse();
-        resolve(messages);
-      }
-    );
-  });
+async function savePublicMessage(msg) {
+  const formatted = {
+    id: msg.id,
+    senderId: msg.senderId || null,
+    senderName: msg.senderName || 'System',
+    senderGender: msg.senderGender || null,
+    text: msg.text,
+    timestamp: msg.timestamp || Date.now(),
+    isSystem: Boolean(msg.isSystem),
+    isPrivate: false
+  };
+
+  messagesCache.push(formatted);
+  persistToDisk();
+  return formatted;
+}
+
+/**
+ * Retrieve the last N public messages in chronological order (Promise API)
+ */
+async function getLastPublicMessages(limit = 10) {
+  const count = Math.max(1, limit);
+  const recent = messagesCache.slice(-count);
+  return recent.map(m => ({ ...m }));
 }
 
 module.exports = {
-  db,
   savePublicMessage,
   getLastPublicMessages
 };
