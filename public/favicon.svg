@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1" />
+      <stop offset="50%" stop-color="#4f46e5" />
+      <stop offset="100%" stop-color="#0ea5e9" />
+    </linearGradient>
+    <linearGradient id="bubbleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="100%" stop-color="#e0e7ff" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#6366f1" flood-opacity="0.4" />
+    </filter>
+  </defs>
+
+  <!-- Rounded App Squircle Background -->
+  <rect width="512" height="512" rx="128" fill="url(#bgGrad)" />
+
+  <!-- Inner Ambient Glow Border -->
+  <rect x="8" y="8" width="496" height="496" rx="120" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="6" />
+
+  <!-- Chat Speech Bubble Icon with Kerala Palm Accent -->
+  <g filter="url(#glow)">
+    <!-- Main Chat Bubble -->
+    <path d="M136 120 C230 120, 376 120, 376 240 C376 340, 270 340, 216 340 L160 392 L160 340 C120 340, 136 290, 136 240 C136 170, 136 120, 136 120 Z" 
+          fill="url(#bubbleGrad)" />
+    
+    <!-- Modern Coconut Palm / Chat Leaf Emblem Inside Bubble -->
+    <!-- Tree Trunk -->
+    <path d="M246 300 C248 250, 258 200, 266 160" stroke="#4f46e5" stroke-width="12" stroke-linecap="round" fill="none"/>
+    <!-- Left Leaves -->
+    <path d="M266 160 C230 150, 190 170, 180 200 C210 200, 240 185, 266 160 Z" fill="#0ea5e9"/>
+    <path d="M262 180 C220 185, 195 215, 190 240 C220 235, 245 210, 262 180 Z" fill="#10b981"/>
+    <!-- Right Leaves -->
+    <path d="M266 160 C300 150, 340 170, 350 200 C320 200, 290 185, 266 160 Z" fill="#0ea5e9"/>
+    <path d="M262 180 C305 185, 330 215, 335 240 C305 235, 280 210, 262 180 Z" fill="#10b981"/>
+  </g>
+</svg>
