@@ -51,6 +51,22 @@ function scrollToBottom() {
   messagesList.scrollTop = messagesList.scrollHeight;
 }
 
+function formatIstTimestamp(value) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  return new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: 'numeric',
+    month: 'short',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(date);
+}
+
 function addMessageToChat(messageData) {
   if (!messageData || !currentUser) return;
 
@@ -72,8 +88,13 @@ function addMessageToChat(messageData) {
   const text = document.createElement('div');
   text.textContent = messageData.message;
 
+  const time = document.createElement('span');
+  time.className = 'message-time';
+  time.textContent = formatIstTimestamp(messageData.createdAt || new Date().toISOString());
+
   bubble.appendChild(meta);
   bubble.appendChild(text);
+  bubble.appendChild(time);
   row.appendChild(bubble);
   messagesList.appendChild(row);
   scrollToBottom();
@@ -103,8 +124,13 @@ function renderMessages(messages, prepend = false) {
     const text = document.createElement('div');
     text.textContent = message.message;
 
+    const time = document.createElement('span');
+    time.className = 'message-time';
+    time.textContent = formatIstTimestamp(message.createdAt || new Date().toISOString());
+
     bubble.appendChild(meta);
     bubble.appendChild(text);
+    bubble.appendChild(time);
     row.appendChild(bubble);
 
     if (prepend) {
@@ -206,7 +232,31 @@ registerForm.addEventListener('submit', (event) => {
   const username = document.getElementById('username').value.trim();
   const gender = document.getElementById('gender').value;
 
+  if (!username || !gender) {
+    authMessage.textContent = 'Please enter a username and select a gender.';
+    authMessage.classList.add('error');
+    return;
+  }
+
+  authMessage.classList.remove('error');
+  authMessage.textContent = 'Connecting...';
+
+  if (!socket.connected) {
+    socket.connect();
+  }
+
   socket.emit('register', { username, gender });
+});
+
+socket.on('connect', () => {
+  if (authMessage && authMessage.textContent === 'Connecting...') {
+    authMessage.textContent = '';
+  }
+});
+
+socket.on('connect_error', () => {
+  authMessage.textContent = 'Unable to reach the chat server. Please refresh and try again.';
+  authMessage.classList.add('error');
 });
 
 chatForm.addEventListener('submit', (event) => {

@@ -130,7 +130,7 @@ ensureDatabase();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.head('/health', (req, res) => {
+app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Chat server is running' });
 });
 
@@ -139,9 +139,11 @@ app.get('*', (req, res) => {
 });
 
 io.on('connection', (socket) => {
+  console.log('client connected', socket.id);
   socket.emit('online-users', getOnlineUsers());
 
   socket.on('register', ({ username, gender }) => {
+    console.log('register event received', { username, gender, socketId: socket.id });
     const cleanUsername = normalizeUsername(username);
     const cleanGender = normalizeGender(gender);
 
