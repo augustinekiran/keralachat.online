@@ -3,6 +3,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
 const cors = require('cors');
+const { savePublicMessage, getLastPublicMessages } = require('./db');
 
 const app = express();
 const server = http.createServer(app);
@@ -37,13 +38,10 @@ app.get('/health', healthHandler);
 app.head('/health', healthHandler);
 
 /**
- * In-memory active state (Ephemeral Guest Mode)
+ * In-memory active online users state
  * - Users map: socket.id -> { id, username, gender, joinedAt }
- * - publicMessages: Ring buffer capped strictly at last 10 messages
  */
 const users = new Map();
-const MAX_PUBLIC_HISTORY = 10;
-const publicMessages = [];
 
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
@@ -65,8 +63,8 @@ function broadcastUserList() {
 }
 
 io.on('connection', (socket) => {
-  // Guest Login Event
-  socket.on('login', (data, callback) => {
+  // Guest Login / Reconnect Event
+  socket.on('login', async (data, callback) => {
     try {
       const rawUsername = data?.username || '';
       const rawGender = data?.gender || '';
@@ -96,16 +94,23 @@ io.on('connection', (socket) => {
         });
       }
 
-      // Check if username is currently taken by another active guest
-      const isTaken = Array.from(users.values()).some(
-        u => u.username.toLowerCase() === username.toLowerCase()
+      // Check if username is taken by ANOTHER active socket
+      const existingUserEntry = Array.from(users.entries()).find(
+        ([sockId, u]) => u.username.toLowerCase() === username.toLowerCase() && sockId !== socket.id
       );
 
-      if (isTaken) {
-        return callback?.({
-          success: false,
-          message: 'This username is currently in use. Please choose another.'
-        });
+      if (existingUserEntry) {
+        const [existingSockId] = existingUserEntry;
+        const existingSocket = io.sockets.sockets.get(existingSockId);
+        // If the other socket is disconnected/dead, remove it so the refreshed user can reclaim it
+        if (!existingSocket || !existingSocket.connected) {
+          users.delete(existingSockId);
+        } else {
+          return callback?.({
+            success: false,
+            message: 'This username is currently active in another session. Please choose another.'
+          });
+        }
       }
 
       const userData = {
@@ -125,21 +130,20 @@ io.on('connection', (socket) => {
         timestamp: Date.now()
       };
 
-      // Push system notice to public history (capped at 10)
-      publicMessages.push(joinNotice);
-      if (publicMessages.length > MAX_PUBLIC_HISTORY) {
-        publicMessages.shift();
-      }
+      // Save system join notice to DB
+      savePublicMessage(joinNotice).catch(err => console.error('DB save error:', err));
 
       // Broadcast system notice to other users
       socket.broadcast.emit('public_message', joinNotice);
 
-      // Send success callback with current state & only last 10 messages
+      // Load last 10 public messages from SQLite database
+      const publicHistory = await getLastPublicMessages(10);
       const onlineUsers = Array.from(users.values());
+
       callback?.({
         success: true,
         user: userData,
-        publicHistory: [...publicMessages],
+        publicHistory,
         users: onlineUsers
       });
 
@@ -152,7 +156,7 @@ io.on('connection', (socket) => {
   });
 
   // Public Message Event
-  socket.on('public_message', (data) => {
+  socket.on('public_message', async (data) => {
     const user = users.get(socket.id);
     if (!user) return;
 
@@ -172,10 +176,11 @@ io.on('connection', (socket) => {
       isPrivate: false
     };
 
-    // Store in rolling buffer capped at MAX_PUBLIC_HISTORY (10)
-    publicMessages.push(message);
-    if (publicMessages.length > MAX_PUBLIC_HISTORY) {
-      publicMessages.shift();
+    // Save message to SQLite database
+    try {
+      await savePublicMessage(message);
+    } catch (err) {
+      console.error('Error saving public message to DB:', err);
     }
 
     // Broadcast to everyone including sender
@@ -190,7 +195,18 @@ io.on('connection', (socket) => {
     }
 
     const recipientId = data?.recipientId;
-    const recipient = users.get(recipientId);
+    const recipientUsername = data?.recipientUsername;
+
+    // Find recipient either by socket ID or by username (in case reconnected)
+    let recipient = null;
+    if (recipientId) {
+      recipient = users.get(recipientId);
+    }
+    if (!recipient && recipientUsername) {
+      recipient = Array.from(users.values()).find(
+        u => u.username.toLowerCase() === recipientUsername.toLowerCase()
+      );
+    }
 
     if (!recipient) {
       return callback?.({ success: false, message: 'User is no longer online.' });
@@ -214,7 +230,7 @@ io.on('connection', (socket) => {
       isPrivate: true
     };
 
-    // Send directly to recipient
+    // Send directly to recipient socket
     io.to(recipient.id).emit('private_message', message);
 
     // Send confirmation back to sender socket
@@ -263,10 +279,7 @@ io.on('connection', (socket) => {
         timestamp: Date.now()
       };
 
-      publicMessages.push(leaveNotice);
-      if (publicMessages.length > MAX_PUBLIC_HISTORY) {
-        publicMessages.shift();
-      }
+      savePublicMessage(leaveNotice).catch(err => console.error('DB save error on leave:', err));
 
       // Notify others in public room
       socket.broadcast.emit('public_message', leaveNotice);

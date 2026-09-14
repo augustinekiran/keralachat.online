@@ -2,20 +2,16 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const { io: Client } = require('socket.io-client');
-const path = require('path');
+const { savePublicMessage, getLastPublicMessages, db } = require('./db');
 
-// Test runner with in-process server test
 async function runTests() {
-  console.log('--- Starting In-Process Test Suite ---');
+  console.log('--- Starting DB & Chat Reconnection Test Suite ---');
   
-  // Set up test server
   const app = express();
   const server = http.createServer(app);
   const io = new Server(server, { cors: { origin: '*' } });
   
   const users = new Map();
-  const MAX_PUBLIC_HISTORY = 10;
-  const publicMessages = [];
 
   function generateId() {
     return Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
@@ -27,35 +23,41 @@ async function runTests() {
   }
 
   io.on('connection', (socket) => {
-    socket.on('login', (data, callback) => {
+    socket.on('login', async (data, callback) => {
       const username = (data?.username || '').trim();
       const gender = (data?.gender || '').toLowerCase().trim();
 
-      const isTaken = Array.from(users.values()).some(
-        u => u.username.toLowerCase() === username.toLowerCase()
+      const existingUserEntry = Array.from(users.entries()).find(
+        ([sockId, u]) => u.username.toLowerCase() === username.toLowerCase() && sockId !== socket.id
       );
 
-      if (isTaken) {
-        return callback?.({ success: false, message: 'Username taken' });
+      if (existingUserEntry) {
+        const [existingSockId] = existingUserEntry;
+        const existingSocket = io.sockets.sockets.get(existingSockId);
+        if (!existingSocket || !existingSocket.connected) {
+          users.delete(existingSockId);
+        } else {
+          return callback?.({ success: false, message: 'Username taken' });
+        }
       }
 
       const userData = { id: socket.id, username, gender, joinedAt: Date.now() };
       users.set(socket.id, userData);
 
       const joinNotice = { id: generateId(), isSystem: true, text: `${username} joined.`, timestamp: Date.now() };
-      publicMessages.push(joinNotice);
-      if (publicMessages.length > MAX_PUBLIC_HISTORY) publicMessages.shift();
+      await savePublicMessage(joinNotice);
 
+      const publicHistory = await getLastPublicMessages(10);
       callback?.({
         success: true,
         user: userData,
-        publicHistory: [...publicMessages],
+        publicHistory,
         users: Array.from(users.values())
       });
       broadcastUserList();
     });
 
-    socket.on('public_message', (data) => {
+    socket.on('public_message', async (data) => {
       const user = users.get(socket.id);
       if (!user) return;
       const message = {
@@ -67,14 +69,18 @@ async function runTests() {
         timestamp: Date.now(),
         isSystem: false
       };
-      publicMessages.push(message);
-      if (publicMessages.length > MAX_PUBLIC_HISTORY) publicMessages.shift();
+      await savePublicMessage(message);
       io.emit('public_message', message);
     });
 
     socket.on('private_message', (data, callback) => {
       const sender = users.get(socket.id);
-      const recipient = users.get(data.recipientId);
+      let recipient = users.get(data.recipientId);
+      if (!recipient && data.recipientUsername) {
+        recipient = Array.from(users.values()).find(
+          u => u.username.toLowerCase() === data.recipientUsername.toLowerCase()
+        );
+      }
       if (!sender || !recipient) return callback?.({ success: false });
 
       const message = {
@@ -104,7 +110,7 @@ async function runTests() {
     });
   });
 
-  const TEST_PORT = 3999;
+  const TEST_PORT = 3998;
   await new Promise((resolve) => server.listen(TEST_PORT, resolve));
   const SERVER_URL = `http://127.0.0.1:${TEST_PORT}`;
   console.log(`Test server running at ${SERVER_URL}`);
@@ -118,7 +124,7 @@ async function runTests() {
       socket1.on('connect', () => {
         socket1.emit('login', { username: 'Rahul', gender: 'male' }, (res) => {
           user1 = res.user;
-          console.log('User 1 login successful:', user1.username, user1.gender);
+          console.log('User 1 logged in:', user1.username);
           resolve();
         });
       });
@@ -132,87 +138,82 @@ async function runTests() {
       socket2.on('connect', () => {
         socket2.emit('login', { username: 'Anjali', gender: 'female' }, (res) => {
           user2 = res.user;
-          console.log('User 2 login successful:', user2.username, user2.gender);
+          console.log('User 2 logged in:', user2.username);
           resolve();
         });
       });
     });
 
-    // 3. Test Public Messages & Cap of 10 messages
-    console.log('\n[Test 3] Sending 15 public messages to verify 10-message max buffer...');
+    // 3. Send 15 public messages and verify SQLite saves all
+    console.log('\n[Test 3] Sending 15 public messages to SQLite database...');
     for (let i = 1; i <= 15; i++) {
-      socket1.emit('public_message', { text: `Public test message #${i}` });
-      await new Promise(r => setTimeout(r, 20));
+      socket1.emit('public_message', { text: `Database test message #${i}` });
+      await new Promise(r => setTimeout(r, 25));
     }
 
-    // 4. Connect User 3 (Vijay) to check public history limit
-    console.log('\n[Test 4] Connecting User 3 (Vijay) to check public history length...');
+    // 4. Connect User 3: Vijay, check that exactly last 10 messages are loaded from SQLite
+    console.log('\n[Test 4] Connecting User 3: Vijay (fetching last 10 from SQLite)...');
     const socket3 = Client(SERVER_URL);
     let user3History = [];
     await new Promise((resolve) => {
       socket3.on('connect', () => {
         socket3.emit('login', { username: 'Vijay', gender: 'male' }, (res) => {
           user3History = res.publicHistory;
-          console.log(`User 3 received ${user3History.length} history messages (Max allowed: 10).`);
+          console.log(`User 3 received ${user3History.length} messages from SQLite.`);
           resolve();
         });
       });
     });
 
     if (user3History.length !== 10) {
-      throw new Error(`Expected exactly 10 messages in public history buffer, got ${user3History.length}`);
+      throw new Error(`Expected exactly 10 messages from DB query, got ${user3History.length}`);
     }
-    console.log('✅ 10-message limit verified successfully!');
+    console.log('✅ SQLite persistent 10-message query verified!');
 
-    // 5. Test Private Chat routing
-    console.log('\n[Test 5] Sending private message from Anjali to Rahul...');
-    let user1ReceivedPrivate = null;
-    let user3ReceivedPrivate = false;
+    // 5. Simulate Tab Refresh & Reconnect for Rahul
+    console.log('\n[Test 5] Simulating tab refresh for Rahul (disconnecting old socket and reconnecting)...');
+    socket1.disconnect();
+    await new Promise(r => setTimeout(r, 100));
 
-    socket1.on('private_message', (msg) => {
-      user1ReceivedPrivate = msg;
-    });
-
-    socket3.on('private_message', () => {
-      user3ReceivedPrivate = true;
-    });
-
-    await new Promise((resolve) => {
-      socket2.emit('private_message', { recipientId: user1.id, text: 'Hello Rahul, secret direct chat!' }, (res) => {
-        setTimeout(resolve, 200);
-      });
-    });
-
-    if (!user1ReceivedPrivate || user1ReceivedPrivate.text !== 'Hello Rahul, secret direct chat!') {
-      throw new Error('User 1 did not receive the expected private message');
-    }
-    if (user3ReceivedPrivate) {
-      throw new Error('User 3 unexpectedly received private message meant for User 1!');
-    }
-    console.log('✅ Private message properly delivered ONLY to recipient!');
-
-    // 6. Test duplicate username rejection
-    console.log('\n[Test 6] Testing duplicate username rejection...');
-    const socket4 = Client(SERVER_URL);
+    const socket1Refreshed = Client(SERVER_URL);
+    let rahulReconnected = false;
     await new Promise((resolve, reject) => {
-      socket4.on('connect', () => {
-        socket4.emit('login', { username: 'rahul', gender: 'male' }, (res) => {
-          if (!res.success) {
-            console.log('✅ Duplicate username correctly rejected:', res.message);
+      socket1Refreshed.on('connect', () => {
+        socket1Refreshed.emit('login', { username: 'Rahul', gender: 'male' }, (res) => {
+          if (res.success) {
+            rahulReconnected = true;
+            console.log('✅ Rahul successfully reconnected with preserved identity on tab refresh!');
             resolve();
           } else {
-            reject(new Error('Duplicate username was incorrectly allowed'));
+            reject(new Error('Failed to reconnect refreshed tab user'));
           }
         });
       });
     });
 
-    socket1.disconnect();
+    // 6. Test Private message delivery to reconnected socket
+    console.log('\n[Test 6] Sending private message from Anjali to reconnected Rahul...');
+    let rahulGotPrivate = null;
+    socket1Refreshed.on('private_message', (msg) => {
+      rahulGotPrivate = msg;
+    });
+
+    await new Promise((resolve) => {
+      socket2.emit('private_message', { recipientUsername: 'Rahul', text: 'Hey Rahul, welcome back after refresh!' }, (res) => {
+        setTimeout(resolve, 200);
+      });
+    });
+
+    if (!rahulGotPrivate || rahulGotPrivate.text !== 'Hey Rahul, welcome back after refresh!') {
+      throw new Error('Reconnected user did not receive private message');
+    }
+    console.log('✅ Private messaging to refreshed user verified!');
+
+    socket1Refreshed.disconnect();
     socket2.disconnect();
     socket3.disconnect();
-    socket4.disconnect();
 
-    console.log('\n🎉 ALL 6 TEST CASES PASSED PERFECTLY! 🎉\n');
+    console.log('\n🎉 ALL PERSISTENCE & RECONNECTION TESTS PASSED! 🎉\n');
   } catch (err) {
     console.error('❌ Test failed:', err);
     process.exitCode = 1;

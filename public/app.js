@@ -1,16 +1,32 @@
 /**
  * KeralaChat - Real-time Public & Private Chat Client
- * Pure In-Memory Ephemeral Guest Mode
+ * Features:
+ * - SQLite-backed Public chat with last 10 messages on login
+ * - Private chat history saved to tab sessionStorage (reconnect without losing messages on same tab refresh)
+ * - Automatic wipeout when tab is closed
+ * - 12-hour AM/PM timestamps, Male/Female avatar badges, and mobile drawer
  */
 
 (() => {
-  // DOM Elements - Login
+  // Session storage keys (tab-level only)
+  const SESSION_STORAGE_KEY = 'kc_tab_session';
+  const PRIVATE_CHATS_STORAGE_KEY = 'kc_tab_private_chats';
+
+  // DOM Elements - Login & Resume
   const loginScreen = document.getElementById('login-screen');
   const chatScreen = document.getElementById('chat-screen');
   const loginForm = document.getElementById('login-form');
   const usernameInput = document.getElementById('username-input');
   const loginError = document.getElementById('login-error');
   const loginBtn = document.getElementById('login-btn');
+
+  const resumeSessionCard = document.getElementById('resume-session-card');
+  const resumeAvatar = document.getElementById('resume-avatar');
+  const resumeUsername = document.getElementById('resume-username');
+  const resumeGender = document.getElementById('resume-gender');
+  const resumeBtn = document.getElementById('resume-btn');
+  const resumeBtnText = document.getElementById('resume-btn-text');
+  const newGuestBtn = document.getElementById('new-guest-btn');
 
   // DOM Elements - Sidebar
   const chatSidebar = document.getElementById('chat-sidebar');
@@ -50,14 +66,14 @@
   const messageInput = document.getElementById('message-input');
   const quickEmojiBar = document.getElementById('quick-emoji-bar');
 
-  // Application In-Memory State
+  // State Management
   let socket = null;
   let currentUser = null;
-  let activeChat = 'public'; // 'public' or recipient socket ID
-  let activeRecipientUser = null; // object if private
+  let activeChat = 'public'; // 'public' or recipient username / user object
+  let activeRecipientUser = null; // { id, username, gender } when in private
   let onlineUsers = [];
-  let publicHistory = []; // max 10 messages
-  let privateChats = new Map(); // socketId -> message[]
+  let publicHistory = []; // last 10 messages from DB
+  let privateChats = new Map(); // partnerUsername -> Array<Message>
   let unreadCounts = { public: 0 };
   let soundEnabled = true;
   let typingTimeout = null;
@@ -89,7 +105,6 @@
 
       const now = audioCtx.currentTime;
       if (isPrivate) {
-        // Higher pitch two-tone for private messages
         osc.frequency.setValueAtTime(587.33, now); // D5
         osc.frequency.setValueAtTime(880, now + 0.08); // A5
         gain.gain.setValueAtTime(0.08, now);
@@ -99,7 +114,6 @@
         osc.start(now);
         osc.stop(now + 0.25);
       } else {
-        // Gentle soft pop for public messages
         osc.frequency.setValueAtTime(440, now); // A4
         gain.gain.setValueAtTime(0.05, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
@@ -109,7 +123,7 @@
         osc.stop(now + 0.18);
       }
     } catch (e) {
-      // Audio playback might be restricted if no user interaction yet
+      // Audio playback restrictions
     }
   }
 
@@ -128,7 +142,7 @@
   }
 
   /**
-   * Helper: Return Male / Female Avatar SVG markup
+   * Helper: Male / Female Avatar SVG markup
    */
   function getAvatarSvg(gender) {
     if (gender === 'female') {
@@ -138,7 +152,6 @@
         <line x1="9" y1="18" x2="15" y2="18"></line>
       </svg>`;
     }
-    // Male avatar
     return `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
       <circle cx="10" cy="14" r="5"></circle>
       <line x1="19" y1="5" x2="13.6" y2="10.4"></line>
@@ -156,6 +169,95 @@
   }
 
   // =========================================================================
+  // TAB SESSION STORAGE HELPERS
+  // =========================================================================
+  function saveTabSession(user) {
+    try {
+      sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user));
+    } catch (e) {}
+  }
+
+  function getTabSession() {
+    try {
+      const data = sessionStorage.getItem(SESSION_STORAGE_KEY);
+      return data ? JSON.parse(data) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function clearTabSession() {
+    try {
+      sessionStorage.removeItem(SESSION_STORAGE_KEY);
+      sessionStorage.removeItem(PRIVATE_CHATS_STORAGE_KEY);
+    } catch (e) {}
+  }
+
+  function savePrivateChatsToStorage() {
+    try {
+      const obj = {};
+      for (const [key, val] of privateChats.entries()) {
+        obj[key] = val;
+      }
+      sessionStorage.setItem(PRIVATE_CHATS_STORAGE_KEY, JSON.stringify(obj));
+    } catch (e) {}
+  }
+
+  function loadPrivateChatsFromStorage() {
+    try {
+      const data = sessionStorage.getItem(PRIVATE_CHATS_STORAGE_KEY);
+      if (data) {
+        const obj = JSON.parse(data);
+        privateChats = new Map(Object.entries(obj));
+      } else {
+        privateChats = new Map();
+      }
+    } catch (e) {
+      privateChats = new Map();
+    }
+  }
+
+  // =========================================================================
+  // INITIALIZATION ON PAGE LOAD / REFRESH
+  // =========================================================================
+  function checkSavedTabSession() {
+    const saved = getTabSession();
+    if (saved && saved.username && saved.gender) {
+      // Show Resume Session Card on same-tab refresh
+      loginForm.classList.add('hidden');
+      resumeSessionCard.classList.remove('hidden');
+
+      resumeUsername.textContent = saved.username;
+      resumeGender.textContent = saved.gender;
+      resumeGender.className = `resume-gender ${saved.gender}`;
+      resumeAvatar.className = `resume-avatar ${saved.gender}`;
+      resumeAvatar.innerHTML = getAvatarSvg(saved.gender);
+      resumeBtnText.textContent = `Reconnect as ${saved.username}`;
+
+      // Resume button event
+      resumeBtn.onclick = () => {
+        executeLogin(saved.username, saved.gender, true);
+      };
+
+      // Discard / New Guest button event
+      newGuestBtn.onclick = () => {
+        clearTabSession();
+        resumeSessionCard.classList.add('hidden');
+        loginForm.classList.remove('hidden');
+        usernameInput.value = '';
+        loginError.classList.add('hidden');
+        usernameInput.focus();
+      };
+    } else {
+      resumeSessionCard.classList.add('hidden');
+      loginForm.classList.remove('hidden');
+    }
+  }
+
+  // Check on startup
+  checkSavedTabSession();
+
+  // =========================================================================
   // LOGIN FLOW
   // =========================================================================
   loginForm.addEventListener('submit', (e) => {
@@ -171,9 +273,17 @@
       return;
     }
 
-    loginBtn.disabled = true;
-    loginBtn.innerHTML = `<span>Joining...</span>`;
+    executeLogin(username, gender, false);
+  });
+
+  function executeLogin(username, gender, isResume = false) {
+    initAudio();
     loginError.classList.add('hidden');
+
+    const targetBtn = isResume ? resumeBtn : loginBtn;
+    const origHtml = targetBtn.innerHTML;
+    targetBtn.disabled = true;
+    targetBtn.innerHTML = `<span>Connecting...</span>`;
 
     // Connect to Socket.IO
     if (!socket || !socket.connected) {
@@ -182,21 +292,21 @@
     }
 
     socket.emit('login', { username, gender }, (response) => {
-      loginBtn.disabled = false;
-      loginBtn.innerHTML = `
-        <span>Join Chat Room</span>
-        <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none">
-          <line x1="5" y1="12" x2="19" y2="12"></line>
-          <polyline points="12 5 19 12 12 19"></polyline>
-        </svg>
-      `;
+      targetBtn.disabled = false;
+      targetBtn.innerHTML = origHtml;
 
       if (response && response.success) {
         currentUser = response.user;
         publicHistory = response.publicHistory || [];
         onlineUsers = response.users || [];
 
-        // Transition from Login to Chat
+        // Save session in tab sessionStorage
+        saveTabSession(currentUser);
+
+        // Load preserved private chat history from tab storage
+        loadPrivateChatsFromStorage();
+
+        // Transition from Login to Chat Screen
         loginScreen.classList.add('hidden');
         chatScreen.classList.remove('hidden');
 
@@ -212,10 +322,19 @@
         switchToPublicChat();
         messageInput.focus();
       } else {
-        showLoginError(response?.message || 'Failed to connect. Please try again.');
+        if (isResume) {
+          // If reconnection failed (e.g. username currently in use elsewhere)
+          alert(response?.message || 'Could not resume session. Please choose another username.');
+          clearTabSession();
+          resumeSessionCard.classList.add('hidden');
+          loginForm.classList.remove('hidden');
+          usernameInput.focus();
+        } else {
+          showLoginError(response?.message || 'Failed to join chat. Please try again.');
+        }
       }
     });
-  });
+  }
 
   function showLoginError(msg) {
     loginError.textContent = msg;
@@ -224,12 +343,13 @@
 
   // Logout / Leave
   logoutBtn.addEventListener('click', () => {
-    if (confirm('Leave KeralaChat? Your active session and private chats will be cleared.')) {
+    if (confirm('Leave KeralaChat? Your active session and private chats in this tab will be cleared.')) {
       performLogout();
     }
   });
 
   function performLogout() {
+    clearTabSession();
     if (socket) {
       socket.disconnect();
       socket = null;
@@ -244,6 +364,8 @@
 
     chatScreen.classList.add('hidden');
     loginScreen.classList.remove('hidden');
+    resumeSessionCard.classList.add('hidden');
+    loginForm.classList.remove('hidden');
     usernameInput.value = '';
     loginError.classList.add('hidden');
     closeSidebar();
@@ -254,7 +376,7 @@
   // =========================================================================
   function setupSocketListeners() {
     socket.on('disconnect', () => {
-      // Disconnected from server
+      // Disconnected
     });
 
     socket.on('connect_error', (err) => {
@@ -264,12 +386,23 @@
     // Updated Online User List
     socket.on('user_list', (users) => {
       onlineUsers = users;
+      // If currently chatting with a private user who reconnected, update their socket id
+      if (activeRecipientUser) {
+        const found = onlineUsers.find(
+          u => u.username.toLowerCase() === activeRecipientUser.username.toLowerCase()
+        );
+        if (found) {
+          activeRecipientUser = found;
+          activeTargetStatus.textContent = `Private Chat • ${found.gender.toUpperCase()} • Online`;
+        } else {
+          activeTargetStatus.textContent = `Private Chat • Offline`;
+        }
+      }
       renderUsersList();
     });
 
     // Public Message
     socket.on('public_message', (message) => {
-      // Append to public buffer (keep last 10)
       publicHistory.push(message);
       if (publicHistory.length > 10) {
         publicHistory.shift();
@@ -279,7 +412,6 @@
         appendMessageElement(message);
         checkScrollAndNotify();
       } else {
-        // User is currently in a private chat
         unreadCounts.public = (unreadCounts.public || 0) + 1;
         updatePublicUnreadBadge();
         updateMobileUnreadDot();
@@ -290,19 +422,25 @@
     // Private Message
     socket.on('private_message', (message) => {
       if (!currentUser) return;
-      const isMine = message.senderId === currentUser.id;
-      const partnerId = isMine ? message.recipientId : message.senderId;
+      const isMine = message.senderId === currentUser.id || message.senderName.toLowerCase() === currentUser.username.toLowerCase();
+      const partnerName = isMine ? message.recipientName : message.senderName;
 
-      if (!privateChats.has(partnerId)) {
-        privateChats.set(partnerId, []);
+      // Store in memory by partner username
+      if (!privateChats.has(partnerName)) {
+        privateChats.set(partnerName, []);
       }
-      privateChats.get(partnerId).push(message);
+      privateChats.get(partnerName).push(message);
 
-      if (activeChat === partnerId) {
+      // Persist in tab sessionStorage
+      savePrivateChatsToStorage();
+
+      const isCurrentActive = activeRecipientUser && activeRecipientUser.username.toLowerCase() === partnerName.toLowerCase();
+
+      if (isCurrentActive) {
         appendMessageElement(message);
         checkScrollAndNotify();
       } else if (!isMine) {
-        unreadCounts[partnerId] = (unreadCounts[partnerId] || 0) + 1;
+        unreadCounts[partnerName] = (unreadCounts[partnerName] || 0) + 1;
         renderUsersList();
         updateMobileUnreadDot();
         playChime(true);
@@ -314,9 +452,9 @@
       const { senderId, senderName, isTyping: typing, isPrivate } = data;
 
       if (isPrivate) {
-        if (activeChat === senderId && typing) {
+        if (activeRecipientUser && activeRecipientUser.username.toLowerCase() === senderName.toLowerCase() && typing) {
           showTypingIndicator(`${senderName} is typing...`);
-        } else if (activeChat === senderId && !typing) {
+        } else if (activeRecipientUser && activeRecipientUser.username.toLowerCase() === senderName.toLowerCase() && !typing) {
           hideTypingIndicator();
         }
       } else {
@@ -335,7 +473,7 @@
   function renderUsersList() {
     const filter = (userSearchInput.value || '').toLowerCase().trim();
     // Exclude current user from private list
-    const otherUsers = onlineUsers.filter(u => !currentUser || u.id !== currentUser.id);
+    const otherUsers = onlineUsers.filter(u => !currentUser || u.id !== currentUser.id && u.username.toLowerCase() !== currentUser.username.toLowerCase());
     onlineCount.textContent = otherUsers.length;
 
     const filtered = otherUsers.filter(u => u.username.toLowerCase().includes(filter));
@@ -352,10 +490,11 @@
 
     filtered.forEach(user => {
       const item = document.createElement('div');
-      item.className = `user-item ${activeChat === user.id ? 'active' : ''}`;
-      item.dataset.userId = user.id;
+      const isSelected = activeRecipientUser && activeRecipientUser.username.toLowerCase() === user.username.toLowerCase();
+      item.className = `user-item ${isSelected ? 'active' : ''}`;
+      item.dataset.username = user.username;
 
-      const unread = unreadCounts[user.id] || 0;
+      const unread = unreadCounts[user.username] || 0;
 
       item.innerHTML = `
         <div class="user-item-avatar ${user.gender}">
@@ -404,7 +543,7 @@
     publicChatNav.classList.add('active');
     switchToPublicBtn.classList.add('hidden');
     roomNotice.classList.remove('hidden');
-    noticeText.textContent = 'Welcome to Public Chat! Only the latest 10 messages are retained. Click any user in the sidebar to start a private chat.';
+    noticeText.textContent = 'Welcome to Public Chat! Showing the last 10 messages from chat history. Click any user in the sidebar to start a private chat.';
 
     activeTargetAvatar.className = 'active-avatar public';
     activeTargetAvatar.innerHTML = getPublicIconSvg();
@@ -412,26 +551,23 @@
     activeTargetStatus.textContent = 'All online members';
     messageInput.placeholder = 'Type a message to public chat...';
 
-    // Render User items active class update
     renderUsersList();
-
-    // Render Messages from public history
     renderPublicFeed();
     closeSidebar();
     hideTypingIndicator();
   }
 
   function switchToPrivateChat(user) {
-    activeChat = user.id;
+    activeChat = 'private';
     activeRecipientUser = user;
-    unreadCounts[user.id] = 0;
+    unreadCounts[user.username] = 0;
     updateMobileUnreadDot();
 
     // UI Updates
     publicChatNav.classList.remove('active');
     switchToPublicBtn.classList.remove('hidden');
     roomNotice.classList.remove('hidden');
-    noticeText.textContent = `🔒 Direct 1-on-1 private chat with @${user.username}. Messages are in-memory and will be lost on refresh.`;
+    noticeText.textContent = `🔒 Direct 1-on-1 private chat with @${user.username}. Saved in this tab session.`;
 
     activeTargetAvatar.className = `active-avatar ${user.gender}`;
     activeTargetAvatar.innerHTML = getAvatarSvg(user.gender);
@@ -440,7 +576,7 @@
     messageInput.placeholder = `Send private message to @${user.username}...`;
 
     renderUsersList();
-    renderPrivateFeed(user.id);
+    renderPrivateFeed(user.username);
     closeSidebar();
     hideTypingIndicator();
     messageInput.focus();
@@ -476,9 +612,9 @@
     scrollToBottom(true);
   }
 
-  function renderPrivateFeed(partnerId) {
+  function renderPrivateFeed(partnerUsername) {
     messagesList.innerHTML = '';
-    const messages = privateChats.get(partnerId) || [];
+    const messages = privateChats.get(partnerUsername) || [];
     messages.forEach(msg => {
       appendMessageElement(msg);
     });
@@ -498,7 +634,10 @@
       return;
     }
 
-    const isMine = currentUser && msg.senderId === currentUser.id;
+    const isMine = currentUser && (
+      msg.senderId === currentUser.id ||
+      (msg.senderName && msg.senderName.toLowerCase() === currentUser.username.toLowerCase())
+    );
     const timeStr = formatTimeAMPM(msg.timestamp);
 
     const row = document.createElement('div');
@@ -573,12 +712,15 @@
 
     if (activeChat === 'public') {
       socket.emit('public_message', { text });
-    } else {
+    } else if (activeRecipientUser) {
       // Private direct message
-      const recipientId = activeChat;
-      socket.emit('private_message', { recipientId, text }, (res) => {
+      socket.emit('private_message', {
+        recipientId: activeRecipientUser.id,
+        recipientUsername: activeRecipientUser.username,
+        text
+      }, (res) => {
         if (res && !res.success) {
-          alert(res.message || 'Could not send message.');
+          alert(res.message || 'Could not send message. User might be offline.');
         }
       });
     }
@@ -606,7 +748,8 @@
     if (!socket || !currentUser) return;
     if (!isTyping) {
       isTyping = true;
-      socket.emit('typing', { isTyping: true, recipientId: activeChat });
+      const targetRecipientId = activeRecipientUser ? activeRecipientUser.id : 'public';
+      socket.emit('typing', { isTyping: true, recipientId: targetRecipientId });
     }
     clearTimeout(typingTimeout);
     typingTimeout = setTimeout(() => {
@@ -617,7 +760,8 @@
   function stopTyping() {
     if (isTyping && socket) {
       isTyping = false;
-      socket.emit('typing', { isTyping: false, recipientId: activeChat });
+      const targetRecipientId = activeRecipientUser ? activeRecipientUser.id : 'public';
+      socket.emit('typing', { isTyping: false, recipientId: targetRecipientId });
     }
   }
 
