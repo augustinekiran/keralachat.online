@@ -1,322 +1,280 @@
-const path = require('path');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const Database = require('better-sqlite3');
+const path = require('path');
+const cors = require('cors');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
-
-const db = new Database(path.join(__dirname, 'db', 'chatapp.db'));
-db.pragma('journal_mode = WAL');
-
-const onlineUsers = new Map();
-
-const validGenders = new Set(['male', 'female']);
-
-function normalizeUsername(value) {
-  return String(value || '').trim().replace(/\s+/g, ' ');
-}
-
-function normalizeGender(value) {
-  return String(value || '').trim().toLowerCase();
-}
-
-function getUserById(userId) {
-  return db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
-}
-
-function getOnlineUsers() {
-  return Array.from(onlineUsers.values())
-    .map((user) => ({
-      id: user.userId,
-      username: user.username,
-      gender: user.gender,
-    }))
-    .sort((a, b) => a.username.localeCompare(b.username));
-}
-
-function broadcastOnlineUsers() {
-  io.emit('online-users', getOnlineUsers());
-}
-
-function getPublicMessages(limit = 10, offset = 0) {
-  const queryLimit = Number(limit) || 10;
-  const queryOffset = Number(offset) || 0;
-
-  return db
-    .prepare(`
-      SELECT m.id, m.message, m.created_at, u.id AS sender_id, u.username AS sender_name
-      FROM messages m
-      JOIN users u ON u.id = m.sender_id
-      WHERE m.room_type = 'public'
-      ORDER BY m.created_at ASC
-      LIMIT ? OFFSET ?
-    `)
-    .all(queryLimit, queryOffset)
-    .map((row) => ({
-      id: row.id,
-      senderId: row.sender_id,
-      senderName: row.sender_name,
-      roomType: 'public',
-      message: row.message,
-      createdAt: row.created_at,
-    }));
-}
-
-function getPrivateMessages(currentUserId, otherUserId) {
-  return db
-    .prepare(`
-      SELECT m.id, m.message, m.created_at, sender.id AS sender_id, sender.username AS sender_name,
-             receiver.id AS receiver_id, receiver.username AS receiver_name
-      FROM messages m
-      JOIN users sender ON sender.id = m.sender_id
-      LEFT JOIN users receiver ON receiver.id = m.receiver_id
-      WHERE (
-        (m.room_type = 'private' AND m.sender_id = ? AND m.receiver_id = ?)
-        OR
-        (m.room_type = 'private' AND m.sender_id = ? AND m.receiver_id = ?)
-      )
-      ORDER BY m.created_at ASC
-    `)
-    .all(currentUserId, otherUserId, otherUserId, currentUserId)
-    .map((row) => ({
-      id: row.id,
-      senderId: row.sender_id,
-      senderName: row.sender_name,
-      receiverId: row.receiver_id,
-      roomType: 'private',
-      message: row.message,
-      createdAt: row.created_at,
-    }));
-}
-
-function getSocketIdForUser(userId) {
-  for (const [socketId, user] of onlineUsers.entries()) {
-    if (Number(user.userId) === Number(userId)) {
-      return socketId;
-    }
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST']
   }
-  return null;
-}
+});
 
-function ensureDatabase() {
-  db.prepare(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT NOT NULL UNIQUE,
-      gender TEXT NOT NULL,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP
-    )
-  `).run();
+const PORT = process.env.PORT || 3000;
 
-  db.prepare(`
-    CREATE TABLE IF NOT EXISTS messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sender_id INTEGER NOT NULL,
-      receiver_id INTEGER,
-      room_type TEXT NOT NULL CHECK(room_type IN ('public', 'private')),
-      message TEXT NOT NULL,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(sender_id) REFERENCES users(id),
-      FOREIGN KEY(receiver_id) REFERENCES users(id)
-    )
-  `).run();
-}
-
-ensureDatabase();
-
-app.use(express.json());
+app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'Chat server is running' });
-});
+// Health check endpoints for Render, monitoring & ping services (GET and HEAD)
+const healthHandler = (req, res) => {
+  res.status(200);
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('X-Online-Users', users.size);
+  if (req.method === 'HEAD') {
+    return res.end();
+  }
+  return res.json({
+    status: 'ok',
+    onlineUsers: users.size,
+    timestamp: new Date().toISOString()
+  });
+};
 
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
+app.get('/health', healthHandler);
+app.head('/health', healthHandler);
+
+/**
+ * In-memory active state (Ephemeral Guest Mode)
+ * - Users map: socket.id -> { id, username, gender, joinedAt }
+ * - publicMessages: Ring buffer capped strictly at last 10 messages
+ */
+const users = new Map();
+const MAX_PUBLIC_HISTORY = 10;
+const publicMessages = [];
+
+function generateId() {
+  return Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
+}
+
+function sanitizeText(text) {
+  if (typeof text !== 'string') return '';
+  return text.trim();
+}
+
+function broadcastUserList() {
+  const userList = Array.from(users.values()).map(u => ({
+    id: u.id,
+    username: u.username,
+    gender: u.gender,
+    joinedAt: u.joinedAt
+  }));
+  io.emit('user_list', userList);
+}
 
 io.on('connection', (socket) => {
-  console.log('client connected', socket.id);
-  socket.emit('online-users', getOnlineUsers());
+  // Guest Login Event
+  socket.on('login', (data, callback) => {
+    try {
+      const rawUsername = data?.username || '';
+      const rawGender = data?.gender || '';
 
-  socket.on('register', ({ username, gender }) => {
-    console.log('register event received', { username, gender, socketId: socket.id });
-    const cleanUsername = normalizeUsername(username);
-    const cleanGender = normalizeGender(gender);
+      const username = sanitizeText(rawUsername);
+      const gender = (rawGender || '').toLowerCase().trim();
 
-    if (!cleanUsername) {
-      return socket.emit('register-error', 'Username is required.');
+      // Validation
+      if (!username || username.length < 2 || username.length > 20) {
+        return callback?.({
+          success: false,
+          message: 'Username must be between 2 and 20 characters.'
+        });
+      }
+
+      if (!/^[a-zA-Z0-9_ -]+$/.test(username)) {
+        return callback?.({
+          success: false,
+          message: 'Username can only contain letters, numbers, spaces, underscores, and hyphens.'
+        });
+      }
+
+      if (gender !== 'male' && gender !== 'female') {
+        return callback?.({
+          success: false,
+          message: 'Please select a valid gender (Male or Female).'
+        });
+      }
+
+      // Check if username is currently taken by another active guest
+      const isTaken = Array.from(users.values()).some(
+        u => u.username.toLowerCase() === username.toLowerCase()
+      );
+
+      if (isTaken) {
+        return callback?.({
+          success: false,
+          message: 'This username is currently in use. Please choose another.'
+        });
+      }
+
+      const userData = {
+        id: socket.id,
+        username,
+        gender,
+        joinedAt: Date.now()
+      };
+
+      users.set(socket.id, userData);
+
+      // System join notification for public chat
+      const joinNotice = {
+        id: generateId(),
+        isSystem: true,
+        text: `${username} joined the chat.`,
+        timestamp: Date.now()
+      };
+
+      // Push system notice to public history (capped at 10)
+      publicMessages.push(joinNotice);
+      if (publicMessages.length > MAX_PUBLIC_HISTORY) {
+        publicMessages.shift();
+      }
+
+      // Broadcast system notice to other users
+      socket.broadcast.emit('public_message', joinNotice);
+
+      // Send success callback with current state & only last 10 messages
+      const onlineUsers = Array.from(users.values());
+      callback?.({
+        success: true,
+        user: userData,
+        publicHistory: [...publicMessages],
+        users: onlineUsers
+      });
+
+      // Broadcast updated user list to all connected clients
+      broadcastUserList();
+    } catch (err) {
+      console.error('Error during login:', err);
+      callback?.({ success: false, message: 'Server error during login.' });
+    }
+  });
+
+  // Public Message Event
+  socket.on('public_message', (data) => {
+    const user = users.get(socket.id);
+    if (!user) return;
+
+    const rawText = data?.text || '';
+    const text = sanitizeText(rawText);
+
+    if (!text || text.length === 0 || text.length > 1000) return;
+
+    const message = {
+      id: generateId(),
+      senderId: user.id,
+      senderName: user.username,
+      senderGender: user.gender,
+      text,
+      timestamp: Date.now(),
+      isSystem: false,
+      isPrivate: false
+    };
+
+    // Store in rolling buffer capped at MAX_PUBLIC_HISTORY (10)
+    publicMessages.push(message);
+    if (publicMessages.length > MAX_PUBLIC_HISTORY) {
+      publicMessages.shift();
     }
 
-    if (!validGenders.has(cleanGender)) {
-      return socket.emit('register-error', 'Please choose a valid gender.');
+    // Broadcast to everyone including sender
+    io.emit('public_message', message);
+  });
+
+  // Private Direct Message Event
+  socket.on('private_message', (data, callback) => {
+    const sender = users.get(socket.id);
+    if (!sender) {
+      return callback?.({ success: false, message: 'You are not logged in.' });
     }
 
-    let user = db.prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?)').get(cleanUsername);
+    const recipientId = data?.recipientId;
+    const recipient = users.get(recipientId);
 
-    if (!user) {
-      const insert = db
-        .prepare('INSERT INTO users (username, gender) VALUES (?, ?)')
-        .run(cleanUsername, cleanGender);
-      user = getUserById(insert.lastInsertRowid);
+    if (!recipient) {
+      return callback?.({ success: false, message: 'User is no longer online.' });
+    }
+
+    const text = sanitizeText(data?.text || '');
+    if (!text || text.length === 0 || text.length > 1000) {
+      return callback?.({ success: false, message: 'Invalid message.' });
+    }
+
+    const message = {
+      id: generateId(),
+      senderId: sender.id,
+      senderName: sender.username,
+      senderGender: sender.gender,
+      recipientId: recipient.id,
+      recipientName: recipient.username,
+      recipientGender: recipient.gender,
+      text,
+      timestamp: Date.now(),
+      isPrivate: true
+    };
+
+    // Send directly to recipient
+    io.to(recipient.id).emit('private_message', message);
+
+    // Send confirmation back to sender socket
+    socket.emit('private_message', message);
+
+    callback?.({ success: true, message });
+  });
+
+  // Typing Indicator Event
+  socket.on('typing', (data) => {
+    const user = users.get(socket.id);
+    if (!user) return;
+
+    const isTyping = Boolean(data?.isTyping);
+    const recipientId = data?.recipientId;
+
+    if (recipientId && recipientId !== 'public') {
+      // Private typing notification
+      io.to(recipientId).emit('user_typing', {
+        senderId: user.id,
+        senderName: user.username,
+        isTyping,
+        isPrivate: true
+      });
     } else {
-      db.prepare('UPDATE users SET gender = ? WHERE id = ?').run(cleanGender, user.id);
-      user = getUserById(user.id);
-    }
-
-    const previousSocket = getSocketIdForUser(user.id);
-    if (previousSocket && previousSocket !== socket.id) {
-      io.to(previousSocket).emit('account-reconnected', {
-        message: 'You have connected from another browser tab and this session was replaced.',
-      });
-      onlineUsers.delete(previousSocket);
-    }
-
-    socket.data.user = user;
-    onlineUsers.set(socket.id, {
-      userId: user.id,
-      username: user.username,
-      gender: user.gender,
-    });
-
-    socket.emit('joined', {
-      user,
-      roomType: 'public',
-      targetUserId: null,
-    });
-
-    socket.emit('room-history', {
-      roomType: 'public',
-      targetUserId: null,
-      messages: getPublicMessages(10, 0),
-    });
-
-    broadcastOnlineUsers();
-    socket.emit('system-message', {
-      message: `Welcome to the public room, ${user.username}!`,
-    });
-    socket.broadcast.emit('system-message', {
-      message: `${user.username} joined the public chat room.`,
-    });
-  });
-
-  socket.on('load-room', ({ roomType, targetUserId }) => {
-    const user = socket.data.user;
-    if (!user) {
-      return;
-    }
-
-    if (roomType === 'public') {
-      const messages = getPublicMessages(10, 0);
-      socket.emit('room-history', {
-        roomType: 'public',
-        targetUserId: null,
-        messages,
-      });
-      return;
-    }
-
-    if (roomType === 'private' && targetUserId) {
-      const messages = getPrivateMessages(user.id, targetUserId);
-      socket.emit('room-history', {
-        roomType: 'private',
-        targetUserId,
-        messages,
-      });
-    }
-  });
-
-  socket.on('load-more-public', ({ offset = 0 }) => {
-    const user = socket.data.user;
-    if (!user) {
-      return;
-    }
-
-    const messages = getPublicMessages(10, Number(offset) || 0);
-    socket.emit('more-public-messages', {
-      messages,
-      offset: Number(offset) || 0,
-    });
-  });
-
-  socket.on('send-message', ({ message, roomType, targetUserId }) => {
-    const user = socket.data.user;
-    if (!user) {
-      return;
-    }
-
-    const cleanMessage = String(message || '').trim();
-    if (!cleanMessage) {
-      return;
-    }
-
-    if (roomType === 'public') {
-      const payload = {
-        id: Date.now(),
+      // Public room typing notification to everyone else
+      socket.broadcast.emit('user_typing', {
         senderId: user.id,
         senderName: user.username,
-        roomType: 'public',
-        message: cleanMessage,
-        createdAt: new Date().toISOString(),
-      };
-
-      db.prepare(
-        'INSERT INTO messages (sender_id, receiver_id, room_type, message) VALUES (?, ?, ?, ?)'
-      ).run(user.id, null, 'public', cleanMessage);
-
-      io.emit('new-message', payload);
-      return;
-    }
-
-    if (roomType === 'private') {
-      const target = Number(targetUserId);
-      if (!target || target === user.id) {
-        return;
-      }
-
-      const timestamp = new Date().toISOString();
-      const insert = db
-        .prepare(
-          'INSERT INTO messages (sender_id, receiver_id, room_type, message, created_at) VALUES (?, ?, ?, ?, ?)'
-        )
-        .run(user.id, target, 'private', cleanMessage, timestamp);
-
-      const payload = {
-        id: insert.lastInsertRowid,
-        senderId: user.id,
-        senderName: user.username,
-        receiverId: target,
-        roomType: 'private',
-        message: cleanMessage,
-        createdAt: timestamp,
-      };
-
-      const targetSocketId = getSocketIdForUser(target);
-      socket.emit('new-message', payload);
-      if (targetSocketId) {
-        io.to(targetSocketId).emit('new-message', payload);
-      }
+        isTyping,
+        isPrivate: false
+      });
     }
   });
 
+  // Disconnection Event
   socket.on('disconnect', () => {
-    const user = socket.data.user;
-    if (!user) {
-      return;
-    }
+    const user = users.get(socket.id);
+    if (user) {
+      users.delete(socket.id);
 
-    onlineUsers.delete(socket.id);
-    broadcastOnlineUsers();
-    socket.broadcast.emit('system-message', {
-      message: `${user.username} left the chat.`,
-    });
+      const leaveNotice = {
+        id: generateId(),
+        isSystem: true,
+        text: `${user.username} left the chat.`,
+        timestamp: Date.now()
+      };
+
+      publicMessages.push(leaveNotice);
+      if (publicMessages.length > MAX_PUBLIC_HISTORY) {
+        publicMessages.shift();
+      }
+
+      // Notify others in public room
+      socket.broadcast.emit('public_message', leaveNotice);
+      broadcastUserList();
+    }
   });
 });
 
-const PORT = process.env.PORT || 3002;
 server.listen(PORT, () => {
-  console.log(`Chat app running on http://localhost:${PORT}`);
+  console.log(`KeralaChat Server running at http://localhost:${PORT}`);
 });
