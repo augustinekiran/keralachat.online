@@ -135,7 +135,7 @@
 
       <!-- LEFT SIDE PANEL / DRAWER -->
       <aside id="chat-sidebar" class="chat-sidebar">
-        <!-- Sidebar Brand & User Info -->
+        <!-- Sidebar Brand & Header -->
         <div class="sidebar-header">
           <div class="sidebar-brand">
             <div class="brand-badge">KC</div>
@@ -144,71 +144,66 @@
               <span class="brand-status"><span class="status-dot online"></span> Online</span>
             </div>
           </div>
-          <!-- Close drawer button for mobile -->
-          <button id="sidebar-close-btn" class="icon-btn mobile-only" aria-label="Close sidebar">
-            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none">
-              <line x1="18" y1="6" x2="6" y2="18"></line>
-              <line x1="6" y1="6" x2="18" y2="18"></line>
-            </svg>
-          </button>
+          
+          <div class="sidebar-header-actions">
+            <!-- Logout Button -->
+            <button id="logout-btn" class="icon-btn-header" title="Leave Chat / Sign Out">
+              <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                <polyline points="16 17 21 12 16 7"></polyline>
+                <line x1="21" y1="12" x2="9" y2="12"></line>
+              </svg>
+            </button>
+            <!-- Close drawer button for mobile -->
+            <button id="sidebar-close-btn" class="icon-btn mobile-only" aria-label="Close sidebar">
+              <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </div>
         </div>
 
-        <!-- Current Logged-in Guest Card -->
-        <div class="current-user-card" id="current-user-card">
-          <div class="avatar-wrapper" id="my-avatar">
-            <!-- Icon rendered via JS -->
-          </div>
-          <div class="user-details">
-            <span class="my-username" id="my-username-display">Guest</span>
-            <span class="my-tag" id="my-gender-display">Male</span>
-          </div>
-          <button id="logout-btn" class="icon-btn-danger" title="Leave Chat / Sign Out">
-            <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none">
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
-              <polyline points="16 17 21 12 16 7"></polyline>
-              <line x1="21" y1="12" x2="9" y2="12"></line>
-            </svg>
-          </button>
-        </div>
-
-        <!-- Navigation / Rooms list -->
+        <!-- Navigation / Channels & Online users list -->
         <div class="sidebar-nav">
           <!-- TOP STATIC PUBLIC CHAT BUTTON -->
-          <div class="nav-section-title">CHANNELS</div>
-          <div class="nav-item active" id="public-chat-nav" data-room="public">
-            <div class="nav-icon public-icon">
-              <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none">
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                <circle cx="9" cy="7" r="4"></circle>
-                <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-                <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+          <div class="nav-static-section">
+            <div class="nav-section-title">CHANNELS</div>
+            <div class="nav-item active" id="public-chat-nav" data-room="public">
+              <div class="nav-icon public-icon">
+                <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none">
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                  <circle cx="9" cy="7" r="4"></circle>
+                  <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                  <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                </svg>
+              </div>
+              <div class="nav-label">
+                <span class="nav-name">Public Chat</span>
+                <span class="nav-hint">Public room (last 10 msgs)</span>
+              </div>
+              <span class="unread-badge hidden" id="public-unread-badge">0</span>
+            </div>
+
+            <!-- ONLINE USERS HEADER & SEARCH -->
+            <div class="nav-section-header">
+              <span class="nav-section-title">ONLINE USERS</span>
+              <span class="online-count-badge" id="online-count">0</span>
+            </div>
+
+            <div class="search-box-wrapper">
+              <svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
               </svg>
+              <input type="text" id="user-search-input" placeholder="Search online users...">
             </div>
-            <div class="nav-label">
-              <span class="nav-name">Public Chat</span>
-              <span class="nav-hint">Open to all (last 10 msgs)</span>
-            </div>
-            <span class="unread-badge hidden" id="public-unread-badge">0</span>
           </div>
 
-          <!-- ONLINE USERS LIST -->
-          <div class="nav-section-header">
-            <span class="nav-section-title">ONLINE USERS</span>
-            <span class="online-count-badge" id="online-count">0</span>
-          </div>
-
-          <div class="search-box-wrapper">
-            <svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none">
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-            </svg>
-            <input type="text" id="user-search-input" placeholder="Filter online users...">
-          </div>
-
+          <!-- SCROLLABLE ONLINE USERS LIST -->
           <div class="users-list-scroll" id="users-list">
-            <!-- Dynamic online user items injected via JS -->
             <div class="empty-users-state">
-              <span>Waiting for other guests to join...</span>
+              <span>Waiting for users to join...</span>
             </div>
           </div>
         </div>
@@ -254,26 +249,11 @@
                 <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
               </svg>
             </button>
-
-            <!-- If in private chat, back to public room button -->
-            <button id="switch-to-public-btn" class="btn-pill hidden" title="Back to Public Chat">
-              <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none">
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                <circle cx="9" cy="7" r="4"></circle>
-              </svg>
-              <span>Public Room</span>
-            </button>
           </div>
         </header>
 
         <!-- Message Feed Area -->
         <section class="messages-container" id="messages-container">
-          <!-- Banner for public chat history explanation -->
-          <div class="room-notice" id="room-notice">
-            <span class="notice-icon">💬</span>
-            <span class="notice-text" id="notice-text">Welcome to Public Chat! Only the latest 10 messages are retained. Click any user in the sidebar to start a private chat.</span>
-          </div>
-
           <div class="messages-list" id="messages-list">
             <!-- Messages rendered dynamically here -->
           </div>
