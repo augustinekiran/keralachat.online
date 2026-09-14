@@ -451,6 +451,54 @@ body {
   border-color: var(--border-light);
 }
 
+/* SEO Footer & Keyword Links */
+.seo-keywords-footer {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+  text-align: center;
+}
+
+.seo-keywords-footer span {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+  display: block;
+  margin-bottom: 8px;
+}
+
+.seo-tags-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.seo-tag-link {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+
+.seo-tag-link:hover {
+  background: rgba(99, 102, 241, 0.15);
+  color: #c7d2fe;
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
+.seo-tag-link.sitemap-link {
+  color: var(--primary);
+  border-color: var(--primary-glow);
+}
+
 /* ==========================================================================
    2. MAIN CHAT LAYOUT
    ========================================================================== */

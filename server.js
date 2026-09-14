@@ -37,6 +37,25 @@ const healthHandler = (req, res) => {
 app.get('/health', healthHandler);
 app.head('/health', healthHandler);
 
+// Sitemap & Robots routes
+app.get('/sitemap.xml', (req, res) => {
+  res.header('Content-Type', 'application/xml');
+  res.sendFile(path.join(__dirname, 'public', 'sitemap.xml'));
+});
+
+app.get('/robots.txt', (req, res) => {
+  res.header('Content-Type', 'text/plain');
+  res.sendFile(path.join(__dirname, 'public', 'robots.txt'));
+});
+
+// SEO keyword routes for Kerala Chat, Mallu Chat, Malayalam Chat
+const seoRoutes = ['/kerala-chat', '/mallu-chat', '/malayalam-chat', '/kerala-chat-rooms', '/malayali-chat'];
+seoRoutes.forEach(route => {
+  app.get(route, (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  });
+});
+
 /**
  * In-memory active online users state
  * - Users map: socket.id -> { id, username, gender, joinedAt }

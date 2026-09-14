@@ -235,6 +235,7 @@
         resumeSessionCard.classList.add('hidden');
         loginForm.classList.remove('hidden');
         usernameInput.value = '';
+        document.querySelectorAll('input[name="gender"]').forEach(r => r.checked = false);
         loginError.classList.add('hidden');
         usernameInput.focus();
       };
@@ -254,13 +255,17 @@
     initAudio();
 
     const username = usernameInput.value.trim();
-    const genderInput = document.querySelector('input[name="gender"]:checked');
-    const gender = genderInput ? genderInput.value : 'male';
-
     if (!username || username.length < 2 || username.length > 20) {
       showLoginError('Username must be between 2 and 20 characters.');
       return;
     }
+
+    const genderInput = document.querySelector('input[name="gender"]:checked');
+    if (!genderInput) {
+      showLoginError('Please select your gender (Male or Female) to join.');
+      return;
+    }
+    const gender = genderInput.value;
 
     executeLogin(username, gender, false);
   });
@@ -342,6 +347,7 @@
     resumeSessionCard.classList.add('hidden');
     loginForm.classList.remove('hidden');
     usernameInput.value = '';
+    document.querySelectorAll('input[name="gender"]').forEach(r => r.checked = false);
     loginError.classList.add('hidden');
     closeSidebar();
   }
